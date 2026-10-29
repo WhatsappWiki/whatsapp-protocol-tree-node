@@ -9,6 +9,12 @@ import zlib
 import pytest
 
 
+pytestmark = pytest.mark.skipif(
+    not (Path(__file__).resolve().parents[1] / "tools" / "verify_live_hook.py").is_file(),
+    reason="Optional local verification tools are not included in the repository",
+)
+
+
 @pytest.fixture
 def verifier(monkeypatch):
     tools = Path(__file__).resolve().parents[1] / "tools"

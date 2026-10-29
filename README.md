@@ -160,16 +160,11 @@ except ProtocolError as error:
 
 ### 验证
 
-`tests/` 覆盖固定字节向量、外部字典替换、列表和长度边界、JID、Unicode/任意 bytes、压缩、截断、错误输入、资源限制、随机树、并发复用和编码布局保留。已完成 304 项测试，语句覆盖率 96.63%，其中 31 项是实际收发核验工具的合成负向与完整性检查。
+`tests/` 包含 273 项编解码测试，覆盖固定字节向量、外部字典替换、列表和长度边界、JID、Unicode/任意 bytes、压缩、截断、错误输入、资源限制、随机树、并发复用和编码布局保留。另有 31 项本地采集核验器的合成负向与完整性检查；缺少本地工具时自动跳过，编解码测试正常执行。
 
-样本验证工具见 `tools/`；真实原始 hook 内容应存放在本地私有目录。运行 hook 的工具单独依赖 Frida，不属于包的运行时依赖，也不通过导入包自动执行。
+可选采集与样本验证脚本仅保留在本地 `tools/`，该目录由 Git 忽略，也不进入源码包或 wheel。真实原始 hook 内容应存放在本地私有目录。采集工具单独依赖 Frida，不属于包的运行时依赖，也不通过导入包自动执行。
 
-实际收发使用 `tools/live_hook.entry.js` 关联原生节点、加密前／解密后的明文及发送成功／接收返回。离线执行：
-
-```sh
-PYTHONPATH=src python tools/verify_live_hook.py \
-  --pairs /private/path/pairs.jsonl --output /tmp/protocol-tree-node-verification.json
-```
+实际收发核验关联原生节点、加密前／解密后的明文及发送成功／接收返回。
 
 实际收发核验覆盖接收 6 条、发送 5 条，观察器错误为 0。11/11 的 Python 解析结果与原客户端对象一致，11/11 的规范写入与原客户端写入器输出逐字节一致，11/11 开启保留模式后与原网络节点字节逐字节一致。接收样本中 4 条采用不同于原客户端写入器的合法编码选择，这正是新增保留模式的原因。
 
@@ -326,16 +321,11 @@ By default, `write(read(data))` produces canonical encoding. Noncanonical length
 
 ### Verification
 
-`tests/` covers fixed byte vectors, dictionary replacement, list/length boundaries, JIDs, Unicode and arbitrary bytes, compression, truncation, malformed inputs, resource limits, randomized trees, concurrent reuse, and encoding-layout preservation. All 304 tests passed with 96.63% statement coverage; 31 of these tests are synthetic negative and completeness controls for the live-traffic verifier.
+`tests/` contains 273 codec tests covering fixed byte vectors, dictionary replacement, list/length boundaries, JIDs, Unicode and arbitrary bytes, compression, truncation, malformed inputs, resource limits, randomized trees, concurrent reuse, and encoding-layout preservation. Another 31 tests provide synthetic negative and completeness controls for the local capture verifier; they are automatically skipped when local tools are absent, while codec tests run normally.
 
-Sample verification tools are in `tools/`; original hook data should remain in a local private directory. Capturing tools depend separately on Frida, which is not a runtime dependency of the package. Importing the package never starts a hook.
+Optional capture and sample-verification scripts remain only in the local `tools/` directory, which is ignored by Git and excluded from both source distributions and wheels. Original hook data should remain in a local private directory. Capturing tools depend separately on Frida, which is not a runtime dependency of the package. Importing the package never starts a hook.
 
-The live observer `tools/live_hook.entry.js` correlates native nodes with plaintext before encryption or after decryption, successful writes, and completed reads. To verify a saved capture offline:
-
-```sh
-PYTHONPATH=src python tools/verify_live_hook.py \
-  --pairs /private/path/pairs.jsonl --output /tmp/protocol-tree-node-verification.json
-```
+Live verification correlates native nodes with plaintext before encryption or after decryption, successful writes, and completed reads.
 
 Live verification covered 6 received and 5 sent samples, with 0 observer errors. Python parsing matched the original client objects in 11/11 cases; canonical write matched the original client writer in 11/11; preservation mode reproduced the network node bytes in 11/11. 4 received samples used valid encoding choices different from the original client's canonical writer, motivating preservation mode.
 
