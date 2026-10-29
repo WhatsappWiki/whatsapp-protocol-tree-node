@@ -23,8 +23,8 @@ keywords = [
 ]
 
 [project.urls]
-Repository = "https://github.com/WhatsappWiki/protocol-tree-node-whatsapp"
-Issues = "https://github.com/WhatsappWiki/protocol-tree-node-whatsapp/issues"
+Repository = "https://github.com/WhatsappWiki/whatsapp-protocol-tree-node"
+Issues = "https://github.com/WhatsappWiki/whatsapp-protocol-tree-node/issues"
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-cov>=5"]
