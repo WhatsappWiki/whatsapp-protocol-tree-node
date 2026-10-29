@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "protocol-tree-node-whatsapp"
+name = "whatsapp-protocol-tree-node"
 version = "0.1.0"
 description = "Pure Python WhatsApp WABinary / Protocol Tree Node serializer and deserializer"
 readme = "README.md"

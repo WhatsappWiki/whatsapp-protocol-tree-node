@@ -17,7 +17,11 @@
 
 ### 安装与测试
 
+本地源码目录和 Python 发行项目名均为 `whatsapp-protocol-tree-node`；Python 导入名为 `protocol_tree_node`。
+
 ```sh
+git clone https://github.com/WhatsappWiki/whatsapp-protocol-tree-node.git
+cd whatsapp-protocol-tree-node
 python -m pip install .
 python -m pip install '.[test]'
 python -m pytest
@@ -180,7 +184,11 @@ The API supports raw node bytes and a `flags + node` plaintext envelope, with op
 
 ### Installation and Tests
 
+The local source directory and Python distribution are named `whatsapp-protocol-tree-node`; the Python import name is `protocol_tree_node`.
+
 ```sh
+git clone https://github.com/WhatsappWiki/whatsapp-protocol-tree-node.git
+cd whatsapp-protocol-tree-node
 python -m pip install .
 python -m pip install '.[test]'
 python -m pytest
