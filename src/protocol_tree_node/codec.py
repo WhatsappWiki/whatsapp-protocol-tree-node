@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from .dictionary import TokenDictionary
 from .model import Attribute, JID, Node, STREAM_END, StreamEnd
 from .layout import NodeLayout, TokenLayout
+from .jid import InvalidJID, is_protocol_compliant, normalize_jid, parse_jid, try_parse_jid
+
+
+def _address(user, server, device=0):
+    if not user:
+        return server
+    return f"{user}{':' + str(device) if device else ''}@{server}"
 
 
 class ProtocolError(ValueError):
@@ -123,21 +130,21 @@ class _Reader:
             except UnicodeDecodeError as exc:
                 raise ProtocolError(f"invalid UTF-8 at byte {self.pos}") from exc
         if token in (247, 250) or (token == 244 and attribute):
-            server_layout, flags, device = None, 0, 0
+            server_layout, flags, device, integrator = None, 0, 0, 0
             if token == 247:
                 flags, device = self.byte(), self.byte()
                 user = self.text(nesting=nesting+1)
                 user_layout = self.last_layout
                 server = {0: "s.whatsapp.net", 1: "lid", 128: "hosted", 129: "hosted.lid"}[flags & 129]
-                jid = JID(user, server, device=device, flags=flags)
+                address = _address(user, server, device)
             elif token == 250:
                 user = self.text(nesting=nesting+1)
                 user_layout = self.last_layout
                 server = self.text(nesting=nesting+1)
                 server_layout = self.last_layout
-                if not server:
+                if server is None:
                     self.fail("missing JID server")
-                jid = JID(user, server)
+                address = _address(user, server)
             else:
                 user = self.text(nesting=nesting+1)
                 user_layout = self.last_layout
@@ -146,13 +153,29 @@ class _Reader:
                     self.fail("invalid interop domain")
                 if domain == 2 and (device or integrator):
                     self.fail("invalid interop group tuple")
-                jid = JID(user, "interop" if domain == 0 else "interop.g.us",
-                          device=device, integrator=integrator)
+                if domain == 0 and not user:
+                    self.fail("missing interop user")
+                server = "interop" if domain == 0 else "interop.g.us"
+                address = (_address(f"{integrator}-{user}", server, device)
+                           if domain == 0 else _address(user, server))
+            value = address
+            if attribute:
+                try:
+                    value = parse_jid(address)
+                except InvalidJID:
+                    # All three tuple branches share this factory fallback in
+                    # DEX. Tuple structure checks above are outside the catch.
+                    value = address
             self.last_layout = TokenLayout(token, user=user_layout, server=server_layout,
                                            flags=flags, device_suffix=bool(device),
                                            separator=(len(user) + (len(str(device)) + 1 if device else 0)
-                                                      if user else None))
-            return jid if attribute else str(jid)
+                                                      if user else None),
+                                           jid_spelling=((user, server) if str(value) != address or
+                                                         (token == 247 and isinstance(value, JID) and
+                                                          (value.user != user or value.device != device))
+                                                         else None),
+                                           device=device, integrator=integrator)
+            return value
         self.fail(f"unsupported string token 0x{token:02x}")
 
     def node(self, depth=0):
@@ -255,16 +278,27 @@ class _Writer:
             self.emit(b"\xfe" + length.to_bytes(4, "big"))
         self.emit(data)
 
-    def text(self, value, *, pack=False):
+    def text(self, value, *, pack=False, infer_jid=False):
         if value is None:
             self.emit(b"\0")
         elif isinstance(value, JID):
-            self.jid(value)
+            try:
+                value = normalize_jid(value)
+            except ValueError as exc:
+                raise ProtocolError("invalid JID object") from exc
+            if is_protocol_compliant(value):
+                self.jid(value)
+            else:
+                self.text(str(value), pack=pack)
         else:
             token = self.dictionary.token(value)
             if token is not None:
                 self.emit(token)
             else:
+                jid = try_parse_jid(value, bare=value.find("@") < 1) if infer_jid else None
+                if jid is not None and is_protocol_compliant(jid):
+                    self.jid(jid)
+                    return
                 try:
                     self.raw(value.encode("utf-8"), pack)
                 except UnicodeEncodeError as exc:
@@ -272,14 +306,17 @@ class _Writer:
 
     def jid(self, jid):
         if jid.integrator is not None:
+            if not 0 <= jid.device < 65536 or not 0 <= jid.integrator < 65536:
+                raise ProtocolError("interop JID exceeds uint16 wire width")
             self.emit(b"\xf4")
             self.text(jid.user, pack=True)
             self.emit(jid.device.to_bytes(2, "big") + jid.integrator.to_bytes(2, "big"))
             self.emit(bytes([0 if jid.server == "interop" else 2]))
-        elif jid.device or jid.flags is not None:
-            flags = jid.flags
-            if flags is None:
-                flags = {"s.whatsapp.net": 0, "lid": 1, "hosted": 128, "hosted.lid": 129}[jid.server]
+        elif jid.device > 0 or (jid.flags is not None and jid.server in ("lid", "hosted.lid")):
+            if not 0 <= jid.device < 256:
+                raise ProtocolError("device JID exceeds uint8 wire width")
+            flags = {"s.whatsapp.net": 0, "lid": 1, "hosted": 128,
+                     "hosted.lid": 129, "bot": 0}[jid.server]
             self.emit(bytes([247, flags, jid.device]))
             self.text(jid.user, pack=True)
         else:
@@ -300,8 +337,8 @@ class _Writer:
     def preserved_jid_text(self, value, layout):
         """Invert a JID rendered in a string position (tag/key/leaf).
 
-        Attribute positions retain JID objects directly. A string cannot retain
-        an omitted nonzero device for an empty user; reject that ambiguity.
+        The saved separator and device disambiguate components omitted by the
+        text renderer. Attribute factory failures can also use this path.
         """
         if layout.separator is not None:
             if value[layout.separator:layout.separator+1] != "@":
@@ -310,11 +347,9 @@ class _Writer:
         else:
             user = None if layout.user.marker == 0 else ""
             server = value
-            if layout.device_suffix:
-                raise ProtocolError("JID string lost its nonzero device; use explicit JID")
         if layout.marker == 250:
             return JID(user, server)
-        device = 0
+        device = layout.device if not user else 0
         if layout.device_suffix and user and ":" in user:
             user, number = user.rsplit(":", 1)
             try:
@@ -328,6 +363,127 @@ class _Writer:
         if str(jid) != value:
             raise ProtocolError("JID text no longer matches its rendered layout")
         return jid
+
+    @staticmethod
+    def spelled_user(original, current, spelling, *, pair):
+        """Apply field edits to the lexical parts discarded by the factory."""
+        if current == original:
+            return spelling
+        if original.integrator is not None:
+            account = spelling
+            prefix = str(current.integrator)
+            if pair and original.server == "interop":
+                old_prefix, separator, account = spelling.rpartition("-")
+                if not separator:
+                    return f"{current.integrator}-{current.user}"
+                if current.integrator == original.integrator:
+                    prefix = old_prefix
+            suffix = (account[len(original.user):]
+                      if account and original.user and account.startswith(original.user) else "")
+            account = (current.user or "") + suffix
+            return f"{prefix}-{account}" if pair and current.server == "interop" else account
+        if not spelling or not original.user or not spelling.startswith(original.user):
+            return current.user
+        suffix = spelling[len(original.user):]
+        if pair and current.device != original.device:
+            if ":" in suffix:
+                before, old_number = suffix.rsplit(":", 1)
+                sign = "+" if old_number.startswith("+") and current.device >= 0 else ""
+                digits = old_number.lstrip("+-")
+                number = str(abs(current.device)).rjust(len(digits), "0")
+                suffix = before + ":" + ("-" if current.device < 0 else sign) + number
+            elif current.device or current.flags is not None:
+                suffix += f":{current.device}"
+        return (current.user or "") + suffix
+
+    def preserved_jid(self, value, layout):
+        """Recover tuple components while re-encoding the current fields."""
+        marker = layout.marker
+        if isinstance(value, str):
+            # String positions and failed FA factories retain their address
+            # text. The recorded separator disambiguates embedded '@' chars.
+            if marker == 250 and layout.separator is None:
+                return None if layout.user.marker == 0 else "", value, 0, 0
+            if marker == 250:
+                separator = layout.separator
+                if value[separator:separator+1] == "@":
+                    return value[:separator], value[separator+1:], 0, 0
+                if value.count("@") == 1:
+                    user, server = value.split("@")
+                    return user, server, 0, 0
+                raise ProtocolError("JID string separator changed from preserved layout")
+            if marker == 244:
+                if value == "interop.g.us":
+                    return None if layout.user.marker == 0 else "", value, 0, 0
+                local, separator, server = value.rpartition("@")
+                if not separator or server not in ("interop", "interop.g.us"):
+                    raise ProtocolError("interop text no longer fits tuple layout")
+                if server == "interop.g.us":
+                    return local, server, 0, 0
+                number, separator, user = local.partition("-")
+                if not separator:
+                    raise ProtocolError("missing interop text integrator")
+                try:
+                    integrator = int(number)
+                    device = 0
+                    if layout.device_suffix:
+                        user, separator, suffix = user.rpartition(":")
+                        if not separator:
+                            raise ValueError("missing device")
+                        device = int(suffix)
+                except ValueError as exc:
+                    raise ProtocolError("invalid interop tuple text") from exc
+                if not user or _address(f"{integrator}-{user}", server, device) != value:
+                    raise ProtocolError("interop text no longer fits tuple semantics")
+                return user, server, device, integrator
+            jid = self.preserved_jid_text(value, layout)
+            return jid.user, jid.server, jid.device, jid.integrator or 0
+        if not isinstance(value, JID):
+            raise ProtocolError("value no longer fits JID layout")
+        try:
+            expected = normalize_jid(value)
+        except InvalidJID as exc:
+            raise ProtocolError("invalid current JID") from exc
+        user, server, device = value.user, value.server, value.device
+        if marker == 250:
+            address = str(value)
+            if "@" in address:
+                user, server = address.rsplit("@", 1)
+            else:
+                user, server = None, address
+        if layout.jid_spelling is not None:
+            old_user, old_server = layout.jid_spelling
+            old_address = (_address(old_user, old_server, layout.device) if marker == 247 else
+                           _address(f"{layout.integrator}-{old_user}", old_server, layout.device)
+                           if marker == 244 and old_server == "interop" else
+                           _address(old_user, old_server))
+            try:
+                original = parse_jid(old_address)
+            except InvalidJID as exc:
+                raise ProtocolError("invalid saved JID spelling") from exc
+            # With an outer F7 device of zero, a colon inside the user token
+            # supplies the factory's device. Keep that placement, rather than
+            # appending the semantic device a second time to the tuple.
+            user_device = marker == 247 and layout.device == 0 and old_user and ":" in old_user
+            user = self.spelled_user(original, value, old_user,
+                                     pair=marker == 250 or bool(user_device))
+            if user_device:
+                device = 0
+            if value.server == original.server:
+                server = old_server
+        if not user:
+            user = None if layout.user.marker == 0 else ""
+            if marker == 247:
+                device = layout.device
+        address = (_address(f"{value.integrator}-{user}", server, device)
+                   if marker == 244 and server == "interop" else
+                   _address(user, server, device if marker == 247 else 0))
+        try:
+            if parse_jid(address) != expected:
+                raise ProtocolError("JID edit no longer fits preserved tuple semantics")
+        except InvalidJID as exc:
+            raise ProtocolError("JID edit no longer fits preserved tuple semantics") from exc
+        return user, server, device, value.integrator or 0
 
     def preserved_token(self, value, layout, nesting=0):
         if not isinstance(layout, TokenLayout):
@@ -385,33 +541,27 @@ class _Writer:
             self.emit(packed)
             return
         if marker in (244, 247, 250):
-            if isinstance(value, str) and marker != 244:
-                try:
-                    value = self.preserved_jid_text(value, layout)
-                except ValueError as exc:
-                    raise ProtocolError("JID text no longer fits layout") from exc
-            if not isinstance(value, JID):
-                raise ProtocolError("value no longer fits JID layout")
+            user, server, device, integrator = self.preserved_jid(value, layout)
             if marker == 250:
-                if value.device or value.flags is not None or value.integrator is not None:
-                    raise ProtocolError("JID no longer fits pair layout")
                 self.emit(b"\xfa")
-                self.preserved_token(value.user, layout.user, nesting+1)
-                self.preserved_token(value.server, layout.server, nesting+1)
+                self.preserved_token(user, layout.user, nesting+1)
+                self.preserved_token(server, layout.server, nesting+1)
             elif marker == 247:
                 domains = {"s.whatsapp.net": 0, "lid": 1, "hosted": 128, "hosted.lid": 129}
-                if value.server not in domains or value.integrator is not None or value.device >= 256:
+                if server not in domains or integrator or not 0 <= device < 256:
                     raise ProtocolError("JID no longer fits device layout")
-                flags = domains[value.server] if value.flags is None else value.flags
-                self.emit(bytes([247, flags, value.device]))
-                self.preserved_token(value.user, layout.user, nesting+1)
+                flags = (layout.flags & ~129) | domains[server]
+                self.emit(bytes([247, flags, device]))
+                self.preserved_token(user, layout.user, nesting+1)
             else:
-                if value.integrator is None or value.server not in ("interop", "interop.g.us"):
+                if ((isinstance(value, JID) and value.integrator is None)
+                        or server not in ("interop", "interop.g.us")
+                        or not 0 <= device < 65536 or not 0 <= integrator < 65536):
                     raise ProtocolError("JID no longer fits interop layout")
                 self.emit(b"\xf4")
-                self.preserved_token(value.user, layout.user, nesting+1)
-                self.emit(value.device.to_bytes(2, "big") + value.integrator.to_bytes(2, "big"))
-                self.emit(bytes([0 if value.server == "interop" else 2]))
+                self.preserved_token(user, layout.user, nesting+1)
+                self.emit(device.to_bytes(2, "big") + integrator.to_bytes(2, "big"))
+                self.emit(bytes([0 if server == "interop" else 2]))
             return
         raise ProtocolError("unsupported preserved token layout")
 
@@ -471,10 +621,10 @@ class _Writer:
             raise ProtocolError("attribute count exceeds limit")
         has_content = node.data is not None or bool(node.children)
         self.list_size(1 + 2 * len(node.attrs) + int(has_content))
-        self.text(node.tag)
+        self.text(node.tag, infer_jid=True)
         for attr in node.attrs:
             self.text(attr.name)
-            self.text(attr.value, pack=True)
+            self.text(attr.value, pack=True, infer_jid=True)
         if node.data is not None:
             self.raw(node.data)
         elif node.children:
@@ -487,7 +637,8 @@ class Codec:
     """Reusable codec with immutable configuration and per-call state.
 
     framed=True means the decrypted flags+node envelope, NOT a transport frame.
-    Attribute strings stay strings; supply JID explicitly for tuple encoding.
+    Default JID handling follows the client's address factories. Wire layout
+    preservation is explicit and does not change the decoded field semantics.
     """
 
     def __init__(self, dictionary: TokenDictionary, *, limits: Limits = Limits()):

@@ -20,7 +20,7 @@ def test_mapping_convenience(codec):
 
 
 def test_json_model_round_trip(codec):
-    node = Node("node", attrs=(Attribute("key", JID("123", "lid", flags=1)), Attribute("key", None)),
+    node = Node("node", attrs=(Attribute("key", JID("123", "lid", device=7, flags=1)), Attribute("key", None)),
                 children=(Node("child", data=bytes(range(256))),))
     plain = json.loads(json.dumps(node.to_dict()))
     assert Node.from_dict(plain) == node

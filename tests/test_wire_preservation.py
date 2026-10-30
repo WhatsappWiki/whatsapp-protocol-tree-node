@@ -119,19 +119,32 @@ def test_stream_end_preserves_list_width(codec):
     assert repr(node) == repr(STREAM_END)
 
 
-@pytest.mark.parametrize("jid", [
-    b"\xfa" + binary(b"12", 253) + binary(b"example.test", 254),
-    b"\xfa\x00\x06",
-    b"\xfa" + binary(b"") + b"\x06",
-    b"\xf7\x80\x00" + binary(b"12", 254),
-    b"\xf7\x7e\x02\xff\x01\x12",
-    b"\xf7\x01\x00\x00",
-    b"\xf4" + binary(b"12", 253) + b"\x01\x23\x04\x56\x00",
-    b"\xf4" + binary(b"group") + b"\x00\x00\x00\x00\x02",
+@pytest.mark.parametrize("jid,semantic_type", [
+    (b"\xfa" + binary(b"12", 253) + binary(b"example.test", 254), str),
+    (b"\xfa\x00\x06", str),
+    (b"\xfa" + binary(b"") + b"\x06", str),
+    (b"\xf7\x80\x00" + binary(b"12345", 254), JID),
+    (b"\xf7\x7e\x02\xff\x83\x12\x34\x5f", JID),
+    (b"\xf7\x00\x00\x00", JID),
+    (b"\xf4" + binary(b"12", 253) + b"\x00\x00\x03\xe7\x00", JID),
+    (b"\xf4" + binary(b"123") + b"\x00\x00\x00\x00\x02", JID),
 ])
-def test_jid_layouts_and_zero_device_flags(codec, jid):
+def test_jid_layouts_and_zero_device_flags(codec, jid, semantic_type):
     node = preserved(codec, attr_packet(jid))
-    assert isinstance(node.attrs[0].value, JID)
+    assert isinstance(node.attrs[0].value, semantic_type)
+
+
+@pytest.mark.parametrize("jid,address", [
+    (b"\xf7\x80\x00" + binary(b"12", 254), "12@hosted"),
+    (b"\xf7\x7e\x02\xff\x01\x12", "12:2@s.whatsapp.net"),
+    (b"\xf7\x01\x00\x00", "lid"),
+    (b"\xf4" + binary(b"12", 253) + b"\x01\x23\x04\x56\x00", "1110-12:291@interop"),
+    (b"\xf4" + binary(b"group") + b"\x00\x00\x00\x00\x02", "group@interop.g.us"),
+])
+def test_jid_factory_fallback_keeps_text_and_preserves_original_tuple(codec, jid, address):
+    node = preserved(codec, attr_packet(jid))
+    assert node.attrs[0].value == address
+    assert codec.write(node, framed=False) == attr_packet(binary(address.encode()))
 
 
 @pytest.mark.parametrize("jid", [
@@ -148,12 +161,12 @@ def test_jids_in_string_positions_preserve_separator_layout(codec, jid):
     preserved(codec, attr_packet(binary(b"value"), key=jid))
 
 
-def test_nonattribute_jid_omitted_device_cannot_be_recovered(codec):
-    packet = b"\xf8\x01\xf7\x00\x02\x00"
+@pytest.mark.parametrize("flags,device,address", [(0, 2, "s.whatsapp.net"), (1, 7, "lid")])
+def test_nonattribute_jid_omitted_user_preserves_device_from_layout(codec, flags, device, address):
+    packet = b"\xf8\x01" + bytes([247, flags, device, 0])
     node = codec.read(packet, framed=False, preserve_wire=True)
-    assert node.tag == "s.whatsapp.net"
-    with pytest.raises(ProtocolError, match="JID"):
-        codec.write(node, framed=False, preserve_wire=True)
+    assert node.tag == address
+    assert codec.write(node, framed=False, preserve_wire=True) == packet
 
 
 @pytest.mark.parametrize("tag", ["12:0@s.whatsapp.net", "12:02@s.whatsapp.net",
@@ -165,7 +178,7 @@ def test_jid_string_edit_must_fit_delimiter_and_rendering(codec, tag):
 
 
 def test_typed_jid_edits_are_encoded_from_current_values(codec):
-    node = preserved(codec, attr_packet(b"\xf7\x00\x00" + binary(b"123")))
+    node = preserved(codec, attr_packet(b"\xf7\x00\x00" + binary(b"12345")))
     changed = replace(node, attrs=(Attribute("key", JID("4567", "lid", 9, flags=1)),))
     assert codec.write(changed, framed=False, preserve_wire=True) == attr_packet(
         b"\xf7\x01\x09" + binary(b"4567")
@@ -189,12 +202,22 @@ def test_incompatible_edits_raise_instead_of_returning_stale_packet(codec, packe
         codec.write(change(node), framed=False, preserve_wire=True)
 
 
-def test_metadata_is_only_structural_numbers_and_has_no_raw_copy(codec):
-    node = preserved(codec, attr_packet(b"\xfa" + binary(b"12") + binary(b"example.test")))
+def test_metadata_contains_only_layout_and_lost_jid_spelling_not_packet_bytes(codec):
+    node = preserved(codec, attr_packet(
+        b"\xfa" + binary(b"12345.ignored:+007") + binary(b"s.whatsapp.net")
+    ))
 
     def check(value):
         if is_dataclass(value):
             for field in fields(value):
+                if field.name == "jid_spelling":
+                    spelling = getattr(value, field.name)
+                    assert spelling is None or (
+                        isinstance(spelling, tuple) and len(spelling) == 2
+                        and (spelling[0] is None or isinstance(spelling[0], str))
+                        and isinstance(spelling[1], str)
+                    )
+                    continue
                 check(getattr(value, field.name))
         elif isinstance(value, tuple):
             for child in value:

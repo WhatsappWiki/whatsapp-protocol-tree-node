@@ -26,26 +26,23 @@ class JID:
             raise ValueError("JID user must be str or None")
         if not isinstance(self.server, str) or not self.server:
             raise ValueError("JID server must be nonempty str")
-        _uint(self.device, 16, "device")
+        # The client's JID objects hold Java ints. Wire widths are checked by
+        # the writer, separately from the address factory's device rules.
+        if type(self.device) is not int or not -(1 << 31) <= self.device < (1 << 31):
+            raise ValueError("device must be int32")
         if self.integrator is not None:
             if self.server not in ("interop", "interop.g.us"):
                 raise ValueError("integrator is only valid for interop JIDs")
             if self.flags is not None:
                 raise ValueError("interop JID cannot have device flags")
-            _uint(self.integrator, 16, "integrator")
+            if type(self.integrator) is not int or not -(1 << 31) <= self.integrator < (1 << 31):
+                raise ValueError("integrator must be int32")
             if self.server == "interop" and not self.user:
                 raise ValueError("interop user must be nonempty")
             if self.server == "interop.g.us" and (self.device or self.integrator):
                 raise ValueError("interop group device/integrator must be zero")
-        elif self.device or self.flags is not None:
-            _uint(self.device, 8, "device")
-            domains = {"s.whatsapp.net": 0, "lid": 1, "hosted": 128, "hosted.lid": 129}
-            if self.server not in domains:
-                raise ValueError("unsupported compact device JID server")
-            if self.flags is not None:
-                _uint(self.flags, 8, "flags")
-                if self.flags & 129 != domains[self.server]:
-                    raise ValueError("JID flags do not match server")
+        elif self.flags is not None:
+            _uint(self.flags, 8, "flags")
 
     def __str__(self):
         if not self.user:

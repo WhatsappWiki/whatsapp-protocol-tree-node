@@ -1,4 +1,4 @@
-"""Encoding choices only; no original packet or payload bytes are retained."""
+"""Encoding choices and lossy JID spelling; never a cached packet or payload."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,6 +15,12 @@ class TokenLayout:
     flags: int = 0
     device_suffix: bool = False
     separator: int | None = None
+    # The address factory can discard arbitrary agent spelling or normalize
+    # numeric suffixes. Keep only those otherwise-lost tuple strings, not a
+    # packet copy. The writer checks their semantics against the current JID.
+    jid_spelling: tuple[str | None, str] | None = None
+    device: int = 0
+    integrator: int = 0
 
 
 @dataclass(frozen=True)
