@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import unicodedata
 
-from .model import JID
+from protocol_tree_node.model import JID
+
+__all__ = ['InvalidJID', 'parse_jid', 'try_parse_jid', 'normalize_jid', 'is_protocol_compliant']
 
 
 class InvalidJID(ValueError):

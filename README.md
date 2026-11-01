@@ -30,6 +30,33 @@ python -m pytest --cov=protocol_tree_node --cov-report=term-missing
 
 开发环境可用 `python -m pip install -e '.[test]'`。构建 wheel/sdist：`python -m build`。
 
+### 项目结构与模块边界
+
+保留浅层 `src/` 包布局，测试集中在独立的 `tests/` 目录：
+
+```text
+src/protocol_tree_node/
+├── __init__.py     # 公共导出与 read/write 便利函数
+├── codec.py        # 组合帧处理与每次调用的读写器
+├── errors.py       # ProtocolError
+├── limits.py       # 共享资源限制 Limits
+├── model.py        # Node、Attribute、JID、StreamEnd 与 JSON 转换
+├── dictionary.py   # 外部 token 字典及可选资源加载
+├── jid.py          # JID 地址工厂与归一化
+├── layout.py       # 内部编码布局数据
+├── _framing.py     # 有界 flags/zlib 封装
+├── _reader.py      # 节点解析、输入游标与节点计数
+├── _writer.py      # 节点写入、输出缓冲与节点计数
+├── _jid_wire.py    # JID 元组文本与保留拼写的还原
+├── data/tokens.json
+└── py.typed
+tests/             # 按模型、字典、JID、协议字节和错误行为组织
+```
+
+`Codec` 只负责组合调用；每次读写创建独立状态。读取器将 token 值与布局成对返回，嵌套 JID、属性和内容不会依赖共享的“上一次布局”。JID 拼写还原是无缓冲状态的函数，模型、字典和地址工厂不依赖 `Codec`。压缩层负责封装和长度限制，节点层负责协议结构及节点资源限制。
+
+各模块用 `__all__` 明确公共接口。应用可继续从包根导入；`protocol_tree_node.codec.Limits` 和 `protocol_tree_node.codec.ProtocolError` 保留为同一类型的兼容导出。以下划线开头的模块和 `layout.py` 是内部实现，不作为稳定接口。现有固定字节、错误输入和编码保留测试用于约束行为，另检查便利函数选项、失败后复用和混合模式并发复用。
+
 <a id="read--write"></a>
 
 ### 读取与写入
@@ -204,6 +231,33 @@ python -m pytest --cov=protocol_tree_node --cov-report=term-missing
 ```
 
 For development, use `python -m pip install -e '.[test]'`. Build a wheel and source distribution with `python -m build`.
+
+### Project Structure and Module Boundaries
+
+The package keeps a shallow `src/` layout with a separate `tests/` directory:
+
+```text
+src/protocol_tree_node/
+├── __init__.py     # Public exports and read/write convenience functions
+├── codec.py        # Composes framing and per-call readers/writers
+├── errors.py       # ProtocolError
+├── limits.py       # Shared resource limits
+├── model.py        # Node, Attribute, JID, StreamEnd and JSON conversion
+├── dictionary.py   # External token dictionaries and optional resource loading
+├── jid.py          # JID address factories and normalization
+├── layout.py       # Internal encoding-layout data
+├── _framing.py     # Bounded flags/zlib envelopes
+├── _reader.py      # Node parsing, input cursor and node count
+├── _writer.py      # Node encoding, output buffer and node count
+├── _jid_wire.py    # JID tuple text and retained-spelling reconstruction
+├── data/tokens.json
+└── py.typed
+tests/             # Organized by models, dictionaries, JIDs, wire bytes and errors
+```
+
+`Codec` composes the operations; each read/write creates independent state. The reader returns token values together with their layouts, so nested JIDs, attributes and content do not depend on shared “last layout” state. JID spelling reconstruction uses functions without buffer state, and models, dictionaries and address factories do not depend on `Codec`. Framing handles envelopes and byte limits; node traversal handles protocol structure and node resource limits.
+
+Each module declares its public interface with `__all__`. Applications can continue importing from the package root; `protocol_tree_node.codec.Limits` and `protocol_tree_node.codec.ProtocolError` remain compatibility exports of the same types. Underscore-prefixed modules and `layout.py` are internal implementation details, not stable interfaces. Existing fixed-byte, malformed-input and wire-preservation tests constrain behavior; additional checks cover convenience-function options, reuse after failures and concurrent reuse across modes.
 
 ### Reading and Writing
 

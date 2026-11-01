@@ -7,6 +7,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping, Sequence
 
+__all__ = ['TokenDictionary']
+
 
 class TokenDictionary:
     """Token positions are wire IDs. None/empty entries are unavailable.

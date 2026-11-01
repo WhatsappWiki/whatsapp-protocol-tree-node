@@ -5,7 +5,9 @@ import base64
 from dataclasses import dataclass, field
 from typing import Mapping
 
-from .layout import NodeLayout
+from protocol_tree_node.layout import NodeLayout
+
+__all__ = ['Attribute', 'JID', 'Node', 'STREAM_END', 'StreamEnd']
 
 
 def _uint(value: int, bits: int, name: str) -> None:
