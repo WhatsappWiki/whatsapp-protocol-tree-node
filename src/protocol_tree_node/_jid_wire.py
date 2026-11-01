@@ -161,6 +161,11 @@ def preserved_jid_parts(value: str | JID, layout: TokenLayout) -> tuple[str | No
             original = parse_jid(old_address)
         except InvalidJID as exc:
             raise ProtocolError("invalid saved JID spelling") from exc
+        # With an absent outer FA user, the whole address (including any
+        # discarded agent/device spelling) belongs to the server token.
+        spelling_in_server = marker == 250 and not old_user
+        if spelling_in_server:
+            old_user, _, old_server = old_server.rpartition("@")
         # With an outer F7 device of zero, a colon inside the user token
         # supplies the factory's device. Keep that placement, rather than
         # appending the semantic device a second time to the tuple.
@@ -171,6 +176,9 @@ def preserved_jid_parts(value: str | JID, layout: TokenLayout) -> tuple[str | No
             device = 0
         if value.server == original.server:
             server = old_server
+        if spelling_in_server:
+            server = format_address(user, server)
+            user = None if layout.user.marker == 0 else ""
     if not user:
         user = None if layout.user.marker == 0 else ""
         if marker == 247:

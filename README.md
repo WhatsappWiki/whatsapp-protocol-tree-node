@@ -103,6 +103,8 @@ assert codec.write(decoded, framed=False, preserve_wire=True) == raw
 
 FA 元组的 server 字段可以包含 `@` 或嵌套地址，因此原始 user/server 边界可能不同于地址工厂的拆分位置。保留模式区分这两种边界：若原 FA server 不含 `@`，仍支持类型化 JID 的 user 修改长度或包含 `@`；server 本身含 `@` 时使用记录的元组边界。无法用该布局表示的编辑会被拒绝，例如把 `x@unknown` 改成 `@unknown` 时，不会静默丢掉开头的 `@`。
 
+若 FA 的外层 user 为 null 或空文本，完整地址及归一化时丢弃的 agent、数字后缀也可能位于 server token 内。编辑类型化 JID 时会在该 server token 中重建地址，保持外层 user 的原编码；固定字典条目无法表示新值时仍抛 `ProtocolError`。
+
 也可使用顶层 `read(data, dictionary=table)`、`write(node, dictionary=table)`。默认 `framed=True`；它指节点的明文封装，**不包含传输层长度或 AES-GCM 密文**。每次调用使用独立读写状态，同一个 Codec 可并发复用；调用期间不要替换其配置对象。
 
 ### 外部字典
@@ -308,6 +310,8 @@ Preservation requires the layout-bearing object returned by read. Device values 
 Preservation distinguishes absent content, byte data and child lists; empty bytes and empty child lists still have their respective content kinds. Changing to a different kind raises `ProtocolError`, including changing `children=None` to `children=()`. Default canonical writing still omits empty child lists.
 
 An FA tuple's server field can contain `@` or a nested address, so its original user/server boundary may differ from the address factory's split. Preservation distinguishes these boundaries: when the original FA server contains no `@`, typed JID user edits can still change length or include `@`; when the server itself contains `@`, the recorded tuple boundary is used. Edits that cannot be represented in that layout are rejected; for example, changing `x@unknown` to `@unknown` will not silently discard the leading `@`.
+
+When an FA tuple's outer user is null or empty text, the full address and any agent or numeric suffix discarded by normalization can reside inside the server token. Typed JID edits rebuild that address within the server token while retaining the outer user's original encoding. A fixed dictionary entry that cannot represent the new value still raises `ProtocolError`.
 
 Top-level `read(data, dictionary=table)` and `write(node, dictionary=table)` are also available. The default is `framed=True`: this refers to the plaintext node envelope and **does not include the transport length or AES-GCM ciphertext**. Every call uses independent reader/writer state, so a Codec can be reused concurrently. Do not replace its configuration during a call.
 

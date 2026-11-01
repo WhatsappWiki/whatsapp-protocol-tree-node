@@ -77,6 +77,67 @@ def test_null_outer_user_allows_edits_in_nested_server(boundary_codec):
     assert boundary_codec.read(output, framed=False) == changed
 
 
+@pytest.mark.parametrize("outer_user", [b"\0", raw(""), b"\xff\0", pair(b"\0", raw(""))])
+@pytest.mark.parametrize("nested_server", [False, True])
+@pytest.mark.parametrize("address,edits,expected", [
+    ("42-123.ignored@interop", {"user": "456"}, "42-456.ignored@interop"),
+    ("42-123.ignored@interop", {"integrator": 43}, "43-123.ignored@interop"),
+    ("+0-123.ignored:0@interop", {"user": "456"}, "+0-456.ignored:0@interop"),
+    ("+04-123.ignored@interop", {"user": "456", "integrator": 43}, "43-456.ignored@interop"),
+    ("12345.ignored:+007@s.whatsapp.net", {"user": "45678", "device": 9},
+     "45678.ignored:+009@s.whatsapp.net"),
+    ("123.ignored:+007@lid", {"user": "456", "device": 9}, "456.ignored:+009@lid"),
+    ("12345@hosted", {"user": "45678"}, "45678@hosted"),
+    ("123@hosted.lid", {"user": "456"}, "456@hosted.lid"),
+])
+def test_normalized_address_in_fa_server_keeps_its_spelling_on_edit(
+    boundary_codec, outer_user, nested_server, address, edits, expected,
+):
+    def server(value):
+        if nested_server:
+            local, domain = value.rsplit("@", 1)
+            return pair(raw(local), raw(domain))
+        return raw(value)
+
+    original = packet(pair(outer_user, server(address)))
+    node = boundary_codec.read(original, framed=False, preserve_wire=True)
+    assert isinstance(node.attrs[0].value, JID)
+    assert boundary_codec.write(node, framed=False, preserve_wire=True) == original
+    changed = replace(node, attrs=(Attribute("key", replace(node.attrs[0].value, **edits)),))
+    output = boundary_codec.write(changed, framed=False, preserve_wire=True)
+    assert output == packet(pair(outer_user, server(expected)))
+    assert boundary_codec.read(output, framed=False) == changed
+
+
+@pytest.mark.parametrize("outer_user", [b"\0", raw("")])
+def test_normalized_address_edit_cannot_change_a_server_dictionary_entry(outer_user):
+    address = "42-123.ignored@interop"
+    codec = Codec(TokenDictionary([None, None, None, "node", "key", address]))
+    original = packet(pair(outer_user, b"\x05"))
+    node = codec.read(original, framed=False, preserve_wire=True)
+    changed = replace(node, attrs=(Attribute("key", replace(node.attrs[0].value, user="456")),))
+    with pytest.raises(ProtocolError, match="dictionary changed"):
+        codec.write(changed, framed=False, preserve_wire=True)
+    assert codec.write(node, framed=False, preserve_wire=True) == original
+
+
+@pytest.mark.parametrize("outer_user", [b"\0", raw("")])
+def test_normalized_server_address_edit_respects_its_byte_length_width(boundary_codec, outer_user):
+    suffix = "." + "x" * 220 + "@s.whatsapp.net"
+    original = packet(pair(outer_user, raw("12345" + suffix)))
+    node = boundary_codec.read(original, framed=False, preserve_wire=True)
+    user = "1234567890123456789"
+    changed = replace(node, attrs=(Attribute("key", replace(node.attrs[0].value, user=user)),))
+    assert len((user + suffix).encode()) == 255
+    output = boundary_codec.write(changed, framed=False, preserve_wire=True)
+    assert output == packet(pair(outer_user, raw(user + suffix)))
+    assert boundary_codec.read(output, framed=False) == changed
+    changed = replace(node, attrs=(Attribute("key", replace(node.attrs[0].value, user=user + "0")),))
+    with pytest.raises(ProtocolError, match="preserved length width"):
+        boundary_codec.write(changed, framed=False, preserve_wire=True)
+    assert boundary_codec.write(node, framed=False, preserve_wire=True) == original
+
+
 def test_ambiguous_separator_edit_is_rejected(boundary_codec):
     original = packet(pair(raw("x"), raw("a@newsletter")))
     node = boundary_codec.read(original, framed=False, preserve_wire=True)
