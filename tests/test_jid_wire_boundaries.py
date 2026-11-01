@@ -138,6 +138,102 @@ def test_normalized_server_address_edit_respects_its_byte_length_width(boundary_
     assert boundary_codec.write(node, framed=False, preserve_wire=True) == original
 
 
+@pytest.mark.parametrize("address", [
+    "12345.agent:+007@s.whatsapp.net", "123.agent:+007@lid", "12345@hosted",
+])
+@pytest.mark.parametrize("user_encoding", ["raw", "wide", "nested"])
+@pytest.mark.parametrize("nested_server", [False, True])
+@pytest.mark.parametrize("target", [JID("hello@z", "newsletter"), JID("1", "g.us")])
+def test_cross_domain_edits_can_still_fill_an_empty_outer_user(
+    boundary_codec, address, user_encoding, nested_server, target,
+):
+    def user(value):
+        if user_encoding == "wide":
+            encoded = value.encode()
+            return b"\xfd" + len(encoded).to_bytes(3, "big") + encoded
+        if user_encoding == "nested":
+            return pair(b"\0", raw(value))
+        return raw(value)
+
+    def server(value):
+        return pair(b"\0", raw(value)) if nested_server else raw(value)
+
+    original = packet(pair(user(""), server(address)))
+    node = boundary_codec.read(original, framed=False, preserve_wire=True)
+    changed = replace(node, attrs=(Attribute("key", target),))
+    output = boundary_codec.write(changed, framed=False, preserve_wire=True)
+    assert output == packet(pair(user(target.user), server(target.server)))
+    assert boundary_codec.read(output, framed=False) == changed
+    assert boundary_codec.write(node, framed=False, preserve_wire=True) == original
+
+
+@pytest.mark.parametrize("address", [
+    "12345.agent:+007@s.whatsapp.net", "123.agent:+007@lid", "12345@hosted",
+])
+def test_cross_domain_edits_with_null_user_can_still_select_a_bare_address(boundary_codec, address):
+    node = boundary_codec.read(packet(pair(b"\0", raw(address))),
+                               framed=False, preserve_wire=True)
+    changed = replace(node, attrs=(Attribute("key", JID(None, "g.us")),))
+    output = boundary_codec.write(changed, framed=False, preserve_wire=True)
+    assert output == packet(pair(b"\0", raw("g.us")))
+    assert boundary_codec.read(output, framed=False) == changed
+
+
+@pytest.mark.parametrize("target", [JID(None, "g.us"), JID("hello@z", "newsletter")])
+@pytest.mark.parametrize("nested_server", [False, True])
+def test_null_user_interop_cross_domain_edits_raise_protocol_errors(boundary_codec, target, nested_server):
+    server = raw("42-123.agent@interop")
+    if nested_server:
+        server = pair(b"\0", server)
+    original = packet(pair(b"\0", server))
+    node = boundary_codec.read(original, framed=False, preserve_wire=True)
+    changed = replace(node, attrs=(Attribute("key", target),))
+    with pytest.raises(ProtocolError, match="JID edit no longer fits preserved tuple semantics"):
+        boundary_codec.write(changed, framed=False, preserve_wire=True)
+    assert boundary_codec.write(node, framed=False, preserve_wire=True) == original
+
+
+@pytest.mark.parametrize("outer_user", [b"\0", raw(""), b"\xff\0", pair(b"\0", raw(""))])
+@pytest.mark.parametrize("nested_server", [False, True])
+def test_cross_domain_edits_keep_compatible_server_spelling(boundary_codec, outer_user, nested_server):
+    def server(value):
+        return pair(b"\0", raw(value)) if nested_server else raw(value)
+
+    original = packet(pair(outer_user, server("12345.agent:+007@s.whatsapp.net")))
+    node = boundary_codec.read(original, framed=False, preserve_wire=True)
+    changed = replace(node, attrs=(Attribute("key", JID("456", "lid", device=9, flags=1)),))
+    output = boundary_codec.write(changed, framed=False, preserve_wire=True)
+    assert output == packet(pair(outer_user, server("456.agent:+009@lid")))
+    assert boundary_codec.read(output, framed=False) == changed
+
+
+def test_null_user_interop_edit_can_rebuild_a_bare_server_when_spelling_allows(boundary_codec):
+    node = boundary_codec.read(packet(pair(b"\0", raw("+04-123@interop"))),
+                               framed=False, preserve_wire=True)
+    changed = replace(node, attrs=(Attribute("key", JID(None, "g.us")),))
+    output = boundary_codec.write(changed, framed=False, preserve_wire=True)
+    assert output == packet(pair(b"\0", raw("g.us")))
+    assert boundary_codec.read(output, framed=False) == changed
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_server_rebuild_discards_partial_output_from_an_incompatible_user_encoding(boundary_codec, packed):
+    outer_user = b"\xff\0" if packed else raw("")
+    address = "12345@hosted".encode()
+    # The wide server remains usable even when a filled FC user exceeds 255 bytes.
+    def server(value):
+        return b"\xfd" + len(value).to_bytes(3, "big") + value
+
+    original = packet(pair(outer_user, server(address)))
+    node = boundary_codec.read(original, framed=False, preserve_wire=True)
+    target = JID("hello@z" if packed else "x" * 256, "newsletter")
+    changed = replace(node, attrs=(Attribute("key", target),))
+    output = boundary_codec.write(changed, framed=False, preserve_wire=True)
+    assert output == packet(pair(outer_user, server(str(target).encode())))
+    assert boundary_codec.read(output, framed=False) == changed
+    assert boundary_codec.write(node, framed=False, preserve_wire=True) == original
+
+
 def test_ambiguous_separator_edit_is_rejected(boundary_codec):
     original = packet(pair(raw("x"), raw("a@newsletter")))
     node = boundary_codec.read(original, framed=False, preserve_wire=True)

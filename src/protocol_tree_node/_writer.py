@@ -170,13 +170,27 @@ class _Writer:
             self.emit(bytes([marker, len(packed) | ((len(value) & 1) << 7)]))
             self.emit(packed)
             return
-        if marker in (244, 247, 250):
+        if marker == 250:
+            # Prefer the existing FA field rules whenever they still fit.
+            # Keep retries inline to avoid an extra frame per nested JID.
+            alternatives = ((False, True) if isinstance(value, JID) and
+                            layout.jid_spelling is not None and not layout.jid_spelling[0]
+                            else (True,))
+            for server_spelling in alternatives:
+                start = len(self.output)
+                try:
+                    user, server, _, _ = preserved_jid_parts(value, layout, server_spelling=server_spelling)
+                    self.emit(b"\xfa")
+                    self.preserved_token(user, layout.user, nesting+1)
+                    self.preserved_token(server, layout.server, nesting+1)
+                    return
+                except ProtocolError:
+                    del self.output[start:]
+                    if server_spelling:
+                        raise
+        if marker in (244, 247):
             user, server, device, integrator = preserved_jid_parts(value, layout)
-            if marker == 250:
-                self.emit(b"\xfa")
-                self.preserved_token(user, layout.user, nesting+1)
-                self.preserved_token(server, layout.server, nesting+1)
-            elif marker == 247:
+            if marker == 247:
                 domains = {"s.whatsapp.net": 0, "lid": 1, "hosted": 128, "hosted.lid": 129}
                 if server not in domains or integrator or not 0 <= device < 256:
                     raise ProtocolError("JID no longer fits device layout")

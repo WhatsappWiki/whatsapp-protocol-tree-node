@@ -57,6 +57,8 @@ def spelled_user(original: JID, current: JID, spelling: str | None, *, pair: boo
         account = spelling
         prefix = str(current.integrator)
         if pair and original.server == "interop":
+            if spelling is None:
+                raise ProtocolError("JID edit no longer fits preserved tuple semantics")
             old_prefix, separator, account = spelling.rpartition("-")
             if not separator:
                 return f"{current.integrator}-{current.user}"
@@ -94,7 +96,8 @@ def pair_components(value: str, layout: TokenLayout) -> tuple[str | None, str]:
     raise ProtocolError("JID string separator changed from preserved layout")
 
 
-def preserved_jid_parts(value: str | JID, layout: TokenLayout) -> tuple[str | None, str, int, int]:
+def preserved_jid_parts(value: str | JID, layout: TokenLayout, *,
+                        server_spelling: bool = True) -> tuple[str | None, str, int, int]:
     """Recover tuple components while re-encoding the current fields."""
     marker = layout.marker
     if isinstance(value, str):
@@ -163,7 +166,7 @@ def preserved_jid_parts(value: str | JID, layout: TokenLayout) -> tuple[str | No
             raise ProtocolError("invalid saved JID spelling") from exc
         # With an absent outer FA user, the whole address (including any
         # discarded agent/device spelling) belongs to the server token.
-        spelling_in_server = marker == 250 and not old_user
+        spelling_in_server = server_spelling and marker == 250 and not old_user
         if spelling_in_server:
             old_user, _, old_server = old_server.rpartition("@")
         # With an outer F7 device of zero, a colon inside the user token
