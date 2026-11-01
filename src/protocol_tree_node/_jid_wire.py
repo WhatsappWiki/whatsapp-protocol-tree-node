@@ -40,6 +40,9 @@ def preserved_jid_text(value: str, layout: TokenLayout) -> JID:
     domains = {"s.whatsapp.net": 0, "lid": 1, "hosted": 128, "hosted.lid": 129}
     if server not in domains:
         raise ProtocolError("JID domain no longer fits compact layout")
+    # Check wire width before the model's int32 guard to keep protocol errors uniform.
+    if not 0 <= device < 256:
+        raise ProtocolError("JID no longer fits device layout")
     jid = JID(user, server, device=device, flags=(layout.flags & ~129) | domains[server])
     if str(jid) != value:
         raise ProtocolError("JID text no longer matches its rendered layout")
@@ -78,22 +81,28 @@ def spelled_user(original: JID, current: JID, spelling: str | None, *, pair: boo
     return (current.user or "") + suffix
 
 
+def pair_components(value: str, layout: TokenLayout) -> tuple[str | None, str]:
+    """Split at the wire boundary, which may precede the address factory's @."""
+    if layout.separator is None:
+        return None if layout.user.marker == 0 else "", value
+    separator = layout.separator
+    if value[separator:separator+1] == "@":
+        return value[:separator], value[separator+1:]
+    if value.count("@") == 1 and not value.startswith("@"):
+        user, server = value.split("@")
+        return user, server
+    raise ProtocolError("JID string separator changed from preserved layout")
+
+
 def preserved_jid_parts(value: str | JID, layout: TokenLayout) -> tuple[str | None, str, int, int]:
     """Recover tuple components while re-encoding the current fields."""
     marker = layout.marker
     if isinstance(value, str):
         # String positions and failed FA factories retain their address
         # text. The recorded separator disambiguates embedded '@' chars.
-        if marker == 250 and layout.separator is None:
-            return None if layout.user.marker == 0 else "", value, 0, 0
         if marker == 250:
-            separator = layout.separator
-            if value[separator:separator+1] == "@":
-                return value[:separator], value[separator+1:], 0, 0
-            if value.count("@") == 1:
-                user, server = value.split("@")
-                return user, server, 0, 0
-            raise ProtocolError("JID string separator changed from preserved layout")
+            user, server = pair_components(value, layout)
+            return user, server, 0, 0
         if marker == 244:
             if value == "interop.g.us":
                 return None if layout.user.marker == 0 else "", value, 0, 0
@@ -129,7 +138,14 @@ def preserved_jid_parts(value: str | JID, layout: TokenLayout) -> tuple[str | No
     user, server, device = value.user, value.server, value.device
     if marker == 250:
         address = str(value)
-        if "@" in address:
+        if layout.jid_spelling is None and layout.server_has_at is not False:
+            # A nested or raw server can itself contain an address. The
+            # factory may then move part of that server into JID.user while
+            # leaving str(JID) unchanged; retain the original tuple boundary.
+            user, server = pair_components(address, layout)
+        elif "@" in address:
+            # With a known plain server, the final separator remains the
+            # tuple boundary even when the edited user gains extra '@' chars.
             user, server = address.rsplit("@", 1)
         else:
             user, server = None, address

@@ -23,6 +23,9 @@ class TokenLayout:
     jid_spelling: tuple[str | None, str] | None = None
     device: int = 0
     integrator: int = 0
+    # FA servers containing '@' have a different boundary from the address
+    # factory. None keeps older layouts conservative when this fact is unknown.
+    server_has_at: bool | None = None
 
 
 @dataclass(frozen=True)

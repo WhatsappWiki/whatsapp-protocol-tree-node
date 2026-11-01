@@ -153,7 +153,8 @@ class _Reader:
                                            (token == 247 and isinstance(value, JID) and
                                             (value.user != user or value.device != device))
                                            else None),
-                             device=device, integrator=integrator)
+                             device=device, integrator=integrator,
+                             server_has_at=("@" in server) if token == 250 else None)
         return value, layout
 
     def node(self, depth: int = 0) -> Node | StreamEnd:
