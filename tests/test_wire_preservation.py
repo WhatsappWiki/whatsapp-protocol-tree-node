@@ -103,6 +103,47 @@ def test_empty_children_are_kept_only_in_preservation_mode(codec, children_head)
     assert codec.write(node, framed=False) == b"\xf8\x01\x03"
 
 
+@pytest.mark.parametrize("source,kind", [
+    ("f80103", "none"),
+    ("f80203fc00", "data"),
+    ("f80203fc0178", "data"),
+    ("f80203f800", "children"),
+    ("f80203f801f80105", "children"),
+])
+@pytest.mark.parametrize("target", ["none", "empty_data", "data", "empty_children", "children"])
+def test_content_edits_keep_the_preserved_kind(codec, source, kind, target):
+    original = bytes.fromhex(source)
+    node = codec.read(original, framed=False, preserve_wire=True)
+    child = codec.read(b"\xf8\x01\x05", framed=False, preserve_wire=True)
+    data, children = {
+        "none": (None, None),
+        "empty_data": (b"", None),
+        "data": (b"new", None),
+        "empty_children": (None, ()),
+        "children": (None, (child,)),
+    }[target]
+    changed = replace(node, data=data, children=children)
+    if target.removeprefix("empty_") == kind:
+        output = codec.write(changed, framed=False, preserve_wire=True)
+        assert codec.read(output, framed=False) == changed
+    else:
+        with pytest.raises(ProtocolError, match="content kind changed"):
+            codec.write(changed, framed=False, preserve_wire=True)
+    assert codec.write(node, framed=False, preserve_wire=True) == original
+    # Canonical encoding still omits an empty child list.
+    canonical = codec.read(codec.write(changed, framed=False), framed=False)
+    assert canonical == (replace(changed, children=None) if children == () else changed)
+
+
+def test_nested_absent_content_cannot_silently_become_empty_children(codec):
+    original = bytes.fromhex("f80203f801f80105")
+    node = codec.read(original, framed=False, preserve_wire=True)
+    changed = replace(node, children=(replace(node.children[0], children=()),))
+    with pytest.raises(ProtocolError, match="content kind changed"):
+        codec.write(changed, framed=False, preserve_wire=True)
+    assert codec.write(node, framed=False, preserve_wire=True) == original
+
+
 def test_nested_nodes_have_independent_layouts(codec):
     child = b"\xf9\x00\x01" + binary(b"child", 254)
     packet = b"\xf9\x00\x02\x03\xf9\x00\x02" + child * 2

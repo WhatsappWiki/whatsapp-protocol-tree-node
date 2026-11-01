@@ -99,6 +99,8 @@ assert codec.write(decoded, framed=False, preserve_wire=True) == raw
 
 保留模式要求使用带布局的 read 返回对象。非属性 JID 转成文本时省略的设备值也保存在内部布局中，以便重建原 tuple；布局无法表达修改后的字段时抛 `ProtocolError`。
 
+保留模式区分无内容、字节数据和子列表，空字节和空子列表也属于各自的内容类型。修改为另一种内容类型会抛 `ProtocolError`，包括把 `children=None` 改成 `children=()`；默认规范写入仍会省略空子列表。
+
 FA 元组的 server 字段可以包含 `@` 或嵌套地址，因此原始 user/server 边界可能不同于地址工厂的拆分位置。保留模式区分这两种边界：若原 FA server 不含 `@`，仍支持类型化 JID 的 user 修改长度或包含 `@`；server 本身含 `@` 时使用记录的元组边界。无法用该布局表示的编辑会被拒绝，例如把 `x@unknown` 改成 `@unknown` 时，不会静默丢掉开头的 `@`。
 
 也可使用顶层 `read(data, dictionary=table)`、`write(node, dictionary=table)`。默认 `framed=True`；它指节点的明文封装，**不包含传输层长度或 AES-GCM 密文**。每次调用使用独立读写状态，同一个 Codec 可并发复用；调用期间不要替换其配置对象。
@@ -144,6 +146,8 @@ JSON 结构：
 默认 `write` 对标签和属性值先查字典，未命中时按客户端的地址工厂规则识别字符串 JID；属性名和 data 不进行 JID 推断。显式 `JID` 对象也会经过地址归一化，构造对象时通过基础类型检查并不表示其地址一定有效。
 
 `read` 读取原始文本或字典字符串时仍返回字符串，不自动将其改为 `JID`。在属性值位置，FA/F7/F4 tuple 均经过严格地址工厂：识别成功返回归一化的 `JID`，地址工厂失败均回退为拼接后的地址字符串。tuple 结构错误仍抛 `ProtocolError`，例如缺失 server、F4 未知 domain、群 tuple 的设备或 integrator 非零，以及空的 interop 用户；这些检查不在地址工厂的回退范围内。因此同一地址的字符串、FA、F7 输入可能具有不同的默认读写结果。
+
+F4 只在属性值位置被读取。默认写入会对标签执行 JID 推断，因此 interop 地址形式的标签可能写为 F4，随后被读取器拒绝；这项位置不对称沿用客户端行为。字典匹配和保留模式下的原始文本标签布局仍可保留可读的字符串编码。
 
 ```python
 from protocol_tree_node import JID
@@ -301,6 +305,8 @@ This retains encoding layout such as dictionary indexes, packed-string choices, 
 
 Preservation requires the layout-bearing object returned by read. Device values omitted when a non-attribute JID is rendered as text are also saved in the internal layout so the original tuple can be reconstructed. If the layout cannot represent edited fields, writing raises `ProtocolError`.
 
+Preservation distinguishes absent content, byte data and child lists; empty bytes and empty child lists still have their respective content kinds. Changing to a different kind raises `ProtocolError`, including changing `children=None` to `children=()`. Default canonical writing still omits empty child lists.
+
 An FA tuple's server field can contain `@` or a nested address, so its original user/server boundary may differ from the address factory's split. Preservation distinguishes these boundaries: when the original FA server contains no `@`, typed JID user edits can still change length or include `@`; when the server itself contains `@`, the recorded tuple boundary is used. Edits that cannot be represented in that layout are rejected; for example, changing `x@unknown` to `@unknown` will not silently discard the leading `@`.
 
 Top-level `read(data, dictionary=table)` and `write(node, dictionary=table)` are also available. The default is `framed=True`: this refers to the plaintext node envelope and **does not include the transport length or AES-GCM ciphertext**. Every call uses independent reader/writer state, so a Codec can be reused concurrently. Do not replace its configuration during a call.
@@ -346,6 +352,8 @@ The optional bundled table is `src/protocol_tree_node/data/tokens.json`, with 12
 By default, `write` checks dictionary entries for tags and attribute values first, then applies the client's address-factory rules to infer string JIDs when no entry matches. Attribute names and data do not undergo JID inference. Explicit `JID` objects also undergo address normalization; passing basic constructor type checks does not guarantee that an address is valid.
 
 When `read` encounters raw text or a dictionary string, it still returns a string without automatically converting it to `JID`. In attribute-value positions, FA/F7/F4 tuples all go through the strict address factory: success returns a normalized `JID`, while address-factory failure falls back to the joined address string for all three forms. Tuple-structure errors still raise `ProtocolError`, such as a missing server, an unknown F4 domain, a nonzero device or integrator in a group tuple, or an empty interop user; these checks are outside the address-factory fallback. String, FA, and F7 inputs for the same address can therefore have different default read/write results.
+
+F4 is read only in attribute-value positions. Default writing applies JID inference to tags, so an interop address used as a tag can be written as F4 and then rejected by the reader; this position asymmetry follows client behavior. Dictionary matches and retained raw-text tag layouts can still preserve readable string encodings.
 
 ```python
 from protocol_tree_node import JID

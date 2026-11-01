@@ -99,6 +99,27 @@ def test_tag_string_address_uses_client_jid_encoding(client_codec):
     assert client_codec.read(expected, framed=False).tag == "12345@s.whatsapp.net"
 
 
+@pytest.mark.parametrize("tag,tuple_bytes", [
+    ("42-123@interop", "f4ff82123f0000002a00"),
+    ("123@interop.g.us", "f4ff82123f0000000002"),
+])
+def test_interop_tag_inference_keeps_the_client_position_asymmetry(client_codec, tag, tuple_bytes):
+    encoded = b"\xf8\x01" + bytes.fromhex(tuple_bytes)
+    assert client_codec.write(Node(tag), framed=False) == encoded
+    with pytest.raises(ProtocolError, match="unsupported string token 0xf4"):
+        client_codec.read(encoded, framed=False)
+    # A retained raw-string layout still reproduces a readable tag exactly.
+    original = b"\xf8\x01" + raw(tag)
+    node = client_codec.read(original, framed=False, preserve_wire=True)
+    assert client_codec.write(node, framed=False, preserve_wire=True) == original
+    # Full-address dictionary entries continue to precede inference.
+    table = TokenDictionary(list(client_codec.dictionary.single) + [tag])
+    dictionary_codec = Codec(table)
+    tokenized = dictionary_codec.write(Node(tag), framed=False)
+    assert tokenized == b"\xf8\x01\x0d"
+    assert dictionary_codec.read(tokenized, framed=False) == Node(tag)
+
+
 def test_attribute_name_is_never_automatically_a_jid(client_codec):
     expected = b"\xf8\x03\x03" + raw("12345@s.whatsapp.net") + b"\x03"
     node = Node("iq", attrs={"12345@s.whatsapp.net": "iq"})

@@ -210,7 +210,7 @@ class _Writer:
         if len(node.attrs) != len(layout.attrs):
             raise ProtocolError("attribute count changed from preserved layout")
         if layout.content_kind == "none":
-            if node.data is not None or node.children:
+            if node.data is not None or node.children is not None:
                 raise ProtocolError("content kind changed from preserved layout")
         elif layout.content_kind == "data":
             if node.data is None or node.children is not None:
