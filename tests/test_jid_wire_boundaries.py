@@ -164,3 +164,30 @@ def test_device_text_overflow_always_raises_protocol_error(boundary_codec, devic
         changed = replace(node, data=value.encode())
     with pytest.raises(ProtocolError, match="device layout"):
         boundary_codec.write(changed, framed=False, preserve_wire=True)
+
+
+@pytest.mark.parametrize("user", [b"\0", raw(""), raw("1"), raw("group"),
+                                  b"\xff\x81\x1f", pair(raw("x"), raw("s"))])
+def test_interop_group_edit_cannot_discard_a_leading_separator(boundary_codec, user):
+    original = packet(b"\xf4" + user + b"\0\0\0\0\x02")
+    node = boundary_codec.read(original, framed=False, preserve_wire=True)
+    changed = replace(node, attrs=(Attribute("key", "@interop.g.us"),))
+    with pytest.raises(ProtocolError, match="interop text no longer fits tuple semantics"):
+        boundary_codec.write(changed, framed=False, preserve_wire=True)
+    assert boundary_codec.write(node, framed=False, preserve_wire=True) == original
+
+
+@pytest.mark.parametrize("value,user", [
+    ("interop.g.us", ""),
+    ("group@interop.g.us", "group"),
+    ("@@interop.g.us", "@"),
+    ("a@@interop.g.us", "a@"),
+])
+@pytest.mark.parametrize("suffix", [b"\0\0\0\0\x02", b"\0\0\0\x01\0"])
+def test_interop_group_text_edits_keep_valid_user_boundaries(boundary_codec, value, user, suffix):
+    node = boundary_codec.read(packet(b"\xf4" + raw("1") + suffix),
+                               framed=False, preserve_wire=True)
+    changed = replace(node, attrs=(Attribute("key", value),))
+    output = boundary_codec.write(changed, framed=False, preserve_wire=True)
+    assert output == packet(b"\xf4" + raw(user) + b"\0\0\0\0\x02")
+    assert boundary_codec.read(output, framed=False) == changed

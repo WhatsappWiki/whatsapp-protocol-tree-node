@@ -1,6 +1,7 @@
 """Bounded flags + node envelopes and optional zlib compression."""
 from __future__ import annotations
 
+import sys
 import zlib
 
 from protocol_tree_node.errors import ProtocolError
@@ -26,7 +27,8 @@ def decode_packet(data: bytes | bytearray | memoryview, *, framed: bool, max_byt
         if flags & 2:
             try:
                 inflater = zlib.decompressobj()
-                data = inflater.decompress(data, max_bytes + 1)
+                # zlib takes Py_ssize_t; Limits accepts any positive Python int.
+                data = inflater.decompress(data, min(max_bytes + 1, sys.maxsize))
             except zlib.error as exc:
                 raise ProtocolError("invalid zlib packet") from exc
             if len(data) > max_bytes:

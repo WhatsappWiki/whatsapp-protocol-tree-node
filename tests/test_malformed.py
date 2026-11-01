@@ -1,4 +1,5 @@
 import random
+import sys
 import zlib
 
 import pytest
@@ -92,6 +93,17 @@ def test_packet_and_expanded_size_limits(dictionary):
             small.read(normal.write(node, compress=compressed))
         with pytest.raises(ProtocolError):
             small.write(node, compress=compressed)
+
+
+@pytest.mark.parametrize("max_bytes", [sys.maxsize, sys.maxsize + 1, 1 << 100])
+def test_large_byte_limits_do_not_overflow_zlib(dictionary, max_bytes):
+    codec = Codec(dictionary, limits=Limits(max_bytes=max_bytes))
+    node = Node("node", data=b"x" * 1024)
+    encoded = codec.write(node, compress=True)
+    assert codec.read(encoded) == node
+    for invalid in (encoded[:-1], encoded + b"\0", b"\x02not-zlib"):
+        with pytest.raises(ProtocolError):
+            codec.read(invalid)
 
 
 def test_node_count_limit(dictionary):

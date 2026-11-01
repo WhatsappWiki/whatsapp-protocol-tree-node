@@ -110,6 +110,8 @@ def preserved_jid_parts(value: str | JID, layout: TokenLayout) -> tuple[str | No
             if not separator or server not in ("interop", "interop.g.us"):
                 raise ProtocolError("interop text no longer fits tuple layout")
             if server == "interop.g.us":
+                if not local:
+                    raise ProtocolError("interop text no longer fits tuple semantics")
                 return local, server, 0, 0
             number, separator, user = local.partition("-")
             if not separator:
